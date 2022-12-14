@@ -121,10 +121,196 @@ at the top of this file. */
 .extern ulSwitchOutExtra
 .extern ulSwitchInExtra
 
-/*-----------------------------------------------------------*/
 .align 8
 .func
 freertos_risc_v_trap_handler:
+	addi sp, sp, - (32 * portWORD_SIZE)
+	store_x x1, 1 * portWORD_SIZE( sp )			//x1:ra
+
+	store_x x4, 4 * portWORD_SIZE( sp )
+	store_x x5, 5 * portWORD_SIZE( sp )
+	store_x x6, 6 * portWORD_SIZE( sp )
+	store_x x7, 7 * portWORD_SIZE( sp )
+	store_x x8, 8 * portWORD_SIZE( sp )
+	store_x x9, 9 * portWORD_SIZE( sp )
+	store_x x10, 10 * portWORD_SIZE( sp )
+	store_x x11, 11 * portWORD_SIZE( sp )
+	store_x x12, 12 * portWORD_SIZE( sp )
+	store_x x13, 13 * portWORD_SIZE( sp )
+	store_x x14, 14 * portWORD_SIZE( sp )
+	store_x x15, 15 * portWORD_SIZE( sp )
+	store_x x16, 16 * portWORD_SIZE( sp )
+	store_x x17, 17 * portWORD_SIZE( sp )
+	store_x x18, 18 * portWORD_SIZE( sp )
+	store_x x19, 19 * portWORD_SIZE( sp )
+	store_x x20, 20 * portWORD_SIZE( sp )
+	store_x x21, 21 * portWORD_SIZE( sp )
+	store_x x22, 22 * portWORD_SIZE( sp )
+	store_x x23, 23 * portWORD_SIZE( sp )
+	store_x x24, 24 * portWORD_SIZE( sp )
+	store_x x25, 25 * portWORD_SIZE( sp )
+	store_x x26, 26* portWORD_SIZE( sp )
+	store_x x27, 27 * portWORD_SIZE( sp )
+	store_x x28, 28 * portWORD_SIZE( sp )
+	store_x x29, 29 * portWORD_SIZE( sp )
+	store_x x30, 30 * portWORD_SIZE( sp )
+	store_x x31, 31 * portWORD_SIZE( sp )
+
+    csrr a0, mepc
+	store_x a0, 0 * portWORD_SIZE( sp )			//epc
+
+    csrr a0, mstatus
+	store_x a0, 2 * portWORD_SIZE( sp )			//mstatus
+
+    /* Save the thread stack frame base to mscratch */
+    csrw mscratch, sp
+
+    /* switch to interrupt stack */
+    la sp, __StackTop
+
+    /* interrupt handle */
+	la a0, rt_interrupt_enter
+	jalr a0
+
+	csrr a0, mcause
+	li t0, 0x807FFFFF
+	and a0, a0, t0
+
+test_if_asynchronous_1:
+	srli a2, a0, __riscv_xlen - 1		/* MSB of mcause is 1 if handing an asynchronous interrupt - shift to LSB to clear other bits. */
+	beq a2, x0, handle_synchronous_1		/* Branch past interrupt handing if not asynchronous. */
+
+handle_asynchronous_1:
+
+#if( portasmHAS_MTIME != 0 )
+
+	test_if_mtimer_1:						/* If there is a CLINT then the mtimer is used to generate the tick interrupt. */
+
+		addi t0, x0, 1
+
+		slli t0, t0, __riscv_xlen - 1   /* LSB is already set, shift into MSB.  Shift 31 on 32-bit or 63 on 64-bit cores. */
+		addi t1, t0, 7					/* 0x8000[]0007 == machine timer interrupt. */
+		bne a0, t1, test_if_external_interrupt_1
+
+		load_x t0, pullMachineTimerCompareRegister  /* Load address of compare register into t0. */
+		load_x t1, pullNextTime  		/* Load the address of ullNextTime into t1. */
+
+		#if( __riscv_xlen == 32 )
+
+			/* Update the 64-bit mtimer compare match value in two 32-bit writes. */
+			li t4, -1
+			lw t2, 0(t1)				/* Load the low word of ullNextTime into t2. */
+			lw t3, 4(t1)				/* Load the high word of ullNextTime into t3. */
+			sw t4, 0(t0)				/* Low word no smaller than old value to start with - will be overwritten below. */
+			sw t3, 4(t0)				/* Store high word of ullNextTime into compare register.  No smaller than new value. */
+			sw t2, 0(t0)				/* Store low word of ullNextTime into compare register. */
+			lw t0, uxTimerIncrementsForOneTick	/* Load the value of ullTimerIncrementForOneTick into t0 (could this be optimized by storing in an array next to pullNextTime?). */
+			add t4, t0, t2				/* Add the low word of ullNextTime to the timer increments for one tick (assumes timer increment for one tick fits in 32-bits). */
+			sltu t5, t4, t2				/* See if the sum of low words overflowed (what about the zero case?). */
+			add t6, t3, t5				/* Add overflow to high word of ullNextTime. */
+			sw t4, 0(t1)				/* Store new low word of ullNextTime. */
+			sw t6, 4(t1)				/* Store new high word of ullNextTime. */
+
+		#endif /* __riscv_xlen == 32 */
+
+		#if( __riscv_xlen == 64 )
+
+			/* Update the 64-bit mtimer compare match value. */
+			ld t2, 0(t1)			 	/* Load ullNextTime into t2. */
+			sd t2, 0(t0)				/* Store ullNextTime into compare register. */
+			ld t0, uxTimerIncrementsForOneTick  /* Load the value of ullTimerIncrementForOneTick into t0 (could this be optimized by storing in an array next to pullNextTime?). */
+			add t4, t0, t2				/* Add ullNextTime to the timer increments for one tick. */
+			sd t4, 0(t1)				/* Store ullNextTime. */
+
+		#endif /* __riscv_xlen == 64 */
+
+		la t0, mtime_handler
+		jalr t0
+
+		j processed_source_1
+
+	test_if_external_interrupt_1:			/* If there is a CLINT and the mtimer interrupt is not pending then check to see if an external interrupt is pending. */
+	#if 0
+		addi t1, t1, 4					/* 0x80000007 + 4 = 0x8000000b == Machine external interrupt. */
+		bne a0, t1, as_yet_unhandled	/* Something as yet unhandled. */
+	#endif
+
+#endif /* portasmHAS_MTIME */
+
+handle_synchronous_1:
+
+processed_source_1:
+
+	la a0, rt_interrupt_leave
+	jalr a0
+
+    /* switch to thread stack */
+    csrr  sp, mscratch
+
+   /* need to switch new thread */
+    la    a0, rt_thread_switch_interrupt_flag
+    lw    a1, 0(a0)
+    beqz  a1, interrupt_exit
+	
+	sw zero, 0(a0)
+
+	la    a0, rt_interrupt_from_thread
+	load_x  a1, 0(a0)
+	store_x sp, 0(a1)
+
+	la    a0, rt_interrupt_to_thread
+	load_x  a1, 0(a0)
+	load_x  sp, 0(a1)
+
+interrupt_exit:
+    /* resw ra to mepc */
+    load_x a0,   0 * portWORD_SIZE(sp)
+    csrw mepc, a0
+
+    load_x x1,   1 * portWORD_SIZE(sp)
+
+//    li    t0, 0x00007800
+//    csrw  mstatus, t0
+
+    load_x a0,   2 * portWORD_SIZE(sp)
+    csrs mstatus, a0
+
+    load_x x4,   4 * portWORD_SIZE(sp)
+    load_x x5,   5 * portWORD_SIZE(sp)
+    load_x x6,   6 * portWORD_SIZE(sp)
+    load_x x7,   7 * portWORD_SIZE(sp)
+    load_x x8,   8 * portWORD_SIZE(sp)
+    load_x x9,   9 * portWORD_SIZE(sp)
+    load_x x10, 10 * portWORD_SIZE(sp)
+    load_x x11, 11 * portWORD_SIZE(sp)
+    load_x x12, 12 * portWORD_SIZE(sp)
+    load_x x13, 13 * portWORD_SIZE(sp)
+    load_x x14, 14 * portWORD_SIZE(sp)
+    load_x x15, 15 * portWORD_SIZE(sp)
+    load_x x16, 16 * portWORD_SIZE(sp)
+    load_x x17, 17 * portWORD_SIZE(sp)
+    load_x x18, 18 * portWORD_SIZE(sp)
+    load_x x19, 19 * portWORD_SIZE(sp)
+    load_x x20, 20 * portWORD_SIZE(sp)
+    load_x x21, 21 * portWORD_SIZE(sp)
+    load_x x22, 22 * portWORD_SIZE(sp)
+    load_x x23, 23 * portWORD_SIZE(sp)
+    load_x x24, 24 * portWORD_SIZE(sp)
+    load_x x25, 25 * portWORD_SIZE(sp)
+    load_x x26, 26 * portWORD_SIZE(sp)
+    load_x x27, 27 * portWORD_SIZE(sp)
+    load_x x28, 28 * portWORD_SIZE(sp)
+    load_x x29, 29 * portWORD_SIZE(sp)
+    load_x x30, 30 * portWORD_SIZE(sp)
+    load_x x31, 31 * portWORD_SIZE(sp)
+
+    addi sp,  sp, 32 * portWORD_SIZE	
+	mret
+	.endfunc
+/*-----------------------------------------------------------*/
+.align 8
+.func
+freertos_risc_v_trap_handler_11:
 	addi sp, sp, -portCONTEXT_SIZE
 	store_x x1, 1 * portWORD_SIZE( sp )
 
@@ -159,6 +345,9 @@ freertos_risc_v_trap_handler:
 	store_x x29, 26 * portWORD_SIZE( sp )
 	store_x x30, 27 * portWORD_SIZE( sp )
 	store_x x31, 28 * portWORD_SIZE( sp )
+
+//	la t0, debug_handler
+//	jalr t0
 
 	/* stat last trap cost */
 	la t0, vCountLastTrapCost
@@ -420,6 +609,10 @@ xPortStartFirstTask:
 	load_x  x5, 29 * portWORD_SIZE( sp )	/* Initial mstatus into x5 (t0) */
 	addi x5, x5, 0x08						/* Set MIE bit so the first task starts with interrupts enabled - required as returns with ret not eret. */
 	csrrw  x0, mstatus, x5					/* Interrupts enabled from here! */
+
+//	la x5, debug_handler
+//	jalr x5
+
 	load_x  x5, 2 * portWORD_SIZE( sp )		/* Initial x5 (t0) value. */
 
 	addi	sp, sp, portCONTEXT_SIZE
@@ -479,13 +672,13 @@ xPortStartFirstTask:
  * x13
  * x12
  * x11
- * pvParameters
+ * x10(a0:pvParameters)
  * x9
  * x8
  * x7
  * x6
  * x5
- * portTASK_RETURN_ADDRESS
+ * x1(portTASK_RETURN_ADDRESS)
  * [chip specific registers go here]
  * pxCode
  */

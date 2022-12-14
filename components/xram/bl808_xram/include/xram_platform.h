@@ -6,7 +6,7 @@
 #include <bl808.h>
 
 #if !defined(XRAM_CPU_C906) && !defined(XRAM_CPU_E907) && !defined(XRAM_CPU_E902)
-#define error "Unknow CPU Type!"
+//#define error "Unknow CPU Type!"
 #endif
 
 struct bl_ipc_regs {
