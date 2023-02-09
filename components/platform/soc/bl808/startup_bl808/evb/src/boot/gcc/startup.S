@@ -73,8 +73,8 @@ risc_e906_start:
     jalr    a0
 #endif
    
-	la a0,  bfl_main
-//	la a0,  entry
+//	la a0,  bfl_main
+	la a0,  entry
     jalr    a0
 
     .size   risc_e906_start, . - risc_e906_start
